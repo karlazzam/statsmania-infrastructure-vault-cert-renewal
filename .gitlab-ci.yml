@@ -1,0 +1,82 @@
+---
+image:
+  name: hashicorp/terraform:light
+  entrypoint:
+    - '/usr/bin/env'
+    - 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+services:
+  - docker:dind
+variables:
+  DOCKER_DRIVER: overlay
+
+stages:
+  - add-temp-sg
+  - renew-certs
+  - remove-temp-sg
+
+add_temp_sg:
+  stage: add-temp-sg
+  before_script:
+    - myip=$(curl ifconfig.me)
+    - rm -rf .terraform
+    - mv terraform/add-sg/deploy.tf deploy.tf
+    - terraform --version
+    - export AWS_ACCESS_KEY_ID=$ACCESS_KEY
+    - export AWS_SECRET_ACCESS_KEY=$SECRET_KEY
+    - terraform init
+  script:
+    - terraform apply -target module.add_sg -input=false
+  only:
+    refs:
+      - master
+    #- schedules
+
+renew_certs:
+  stage: renew-certs
+  image: geerlingguy/docker-centos7-ansible:latest
+  before_script:
+    - export ANSIBLE_HOST_KEY_CHECKING=False
+    - ansible --version
+    - yum install git -y -q
+    - git clone https://$GIT_USER:$GIT_PW@github.com/karlazzam/gitlab-ansible-setup-playbook # Fetch playbook to configure container to run ansible with all requirements
+    - cd gitlab-ansible-setup-playbook # Copy playbook to configure container to run ansible with all requirements
+    - ansible-playbook main.yml --extra-vars "ACCESS_KEY=$ACCESS_KEY SECRET_KEY=$SECRET_KEY AWS_REGION=$AWS_REGION S3_REQ_YML_KEY_PATH=$S3_REQ_YML_KEY_PATH"
+    - echo 'blah' #TODO: create playbooks
+    - cd .. && cp -a -n playbook/generate-certs/. . # Copy generate certs playbook into current directory so we can run it
+    - rm main.yml && rm -rf group_vars
+    - cd .. && cp -a -n playbook/renew-certs/. . # Copy renew certs playbook into current directory so we can run it
+  script:
+    - cat "$DEV_PRIV_KEY_PEM" >> ~/.ssh/priv_key.pem
+    - chmod 400 ~/.ssh/priv_key.pem
+    - eval `ssh-agent -s`
+    - ssh-add ~/.ssh/priv_key.pem
+    # - ansible-playbook -i inventory/dev_aws_ec2.yml main.yml  --extra-vars "ENV=dev"
+    # - cat "$PROD_PRIV_KEY_PEM" >> ~/.ssh/priv_key.pem
+    # - chmod 400 ~/.ssh/priv_key.pem
+    # - eval `ssh-agent -s`
+    # - ssh-add ~/.ssh/priv_key.pem
+    # - ansible-playbook -i inventory/prod_aws_ec2.yml main.yml  --extra-vars "ENV=prod"
+  only:
+    refs:
+      - master
+    #- schedules
+
+remove_temp_sg:
+  stage: remove-temp-sg
+  before_script:
+    - myip=$(curl ifconfig.me)
+    - rm -rf .terraform
+    - mv terraform/remove-sg/deploy.tf deploy.tf
+    - terraform --version
+    - export AWS_ACCESS_KEY_ID=$ACCESS_KEY
+    - export AWS_SECRET_ACCESS_KEY=$SECRET_KEY
+    - terraform init
+  script:
+    - terraform apply -target module.remove_sg -input=false
+  only:
+    refs:
+      - master
+    #- schedules
+
+
+
